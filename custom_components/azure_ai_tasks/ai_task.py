@@ -66,7 +66,7 @@ MEDIA_LOCAL_PATH = "/media/local/"
 
 def _uses_max_completion_tokens(model: str) -> bool:
     """Check if the model uses max_completion_tokens parameter instead of max_tokens.
-    
+
     GPT-5 models (including gpt-5-mini) and newer models require max_completion_tokens.
     Older models like GPT-4, GPT-3.5 use max_tokens.
     """
@@ -75,6 +75,23 @@ def _uses_max_completion_tokens(model: str) -> bool:
     model_lower = model.lower()
     # GPT-5 models use max_completion_tokens
     return model_lower.startswith("gpt-5")
+
+
+def _supports_temperature_override(model: str) -> bool:
+    """Check if the model supports setting a custom temperature value.
+
+    GPT-5 and o1/o3 reasoning models only accept the default temperature (1)
+    and will return an API error if a different value is sent.
+    """
+    if not model:
+        return True
+    model_lower = model.lower()
+    # GPT-5 series and o1/o3 reasoning models do not support non-default temperature
+    if model_lower.startswith("gpt-5"):
+        return False
+    if model_lower.startswith("o1") or model_lower.startswith("o3"):
+        return False
+    return True
 
 
 async def async_setup_entry(
@@ -514,14 +531,15 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
             payload: dict[str, Any] = {
                 "messages": [{"role": "user", "content": message_content}],
                 token_param: MAX_TOKENS,
-                "temperature": DEFAULT_TEMPERATURE,
             }
         else:
             payload = {
                 "messages": [{"role": "user", "content": user_message}],
                 token_param: MAX_TOKENS,
-                "temperature": DEFAULT_TEMPERATURE,
             }
+
+        if _supports_temperature_override(model):
+            payload["temperature"] = DEFAULT_TEMPERATURE
 
         # Foundry endpoints require the model name in the request body
         if self._is_foundry_endpoint:
@@ -664,9 +682,10 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         payload: dict[str, Any] = {
             "messages": [{"role": "user", "content": message_content}],
             token_param: MAX_TOKENS,
-            "temperature": DEFAULT_TEMPERATURE,
             "model": image_model,
         }
+        if _supports_temperature_override(image_model):
+            payload["temperature"] = DEFAULT_TEMPERATURE
         url = self._build_url("chat", image_model)
         headers = self._get_headers()
 
