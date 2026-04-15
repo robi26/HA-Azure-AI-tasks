@@ -1,7 +1,7 @@
 # Azure AI Tasks - Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![GitHub release](https://img.shields.io/github/release/loryanstrant/HA-Azure-AI-Tasks.svg)](https://github.com/loryanstrant/HA-Azure-AI-Tasks/releases/)
+[![GitHub release](https://img.shields.io/github/release/robi26/HA-Azure-AI-Tasks.svg)](https://github.com/robi26/HA-Azure-AI-Tasks/releases/)
 
 A Home Assistant custom integration that facilitates AI tasks using Azure AI services.
 
@@ -29,7 +29,7 @@ A Home Assistant custom integration that facilitates AI tasks using Azure AI ser
 1. Open HACS in your Home Assistant instance
 2. Go to "Integrations"
 3. Click the three dots menu and select "Custom repositories"
-4. Add `https://github.com/loryanstrant/HA-Azure-AI-Tasks` as repository
+4. Add `https://github.com/robi26/HA-Azure-AI-Tasks` as repository
 5. Set category to "Integration"
 6. Click "Add"
 7. Find "Azure AI Tasks" in the integration list and install it
@@ -40,7 +40,7 @@ A Home Assistant custom integration that facilitates AI tasks using Azure AI ser
 
 Or replace steps 1-6 with this:
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=loryanstrant&repository=HA-Azure-AI-Tasks&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=robi26&repository=HA-Azure-AI-Tasks&category=integration)
 
 ### Manual Installation
 
@@ -202,4 +202,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-If you encounter any issues, please report them on the [GitHub Issues page](https://github.com/loryanstrant/HA-Azure-AI-tasks/issues).
+If you encounter any issues, please report them on the [GitHub Issues page](https://github.com/robi26/HA-Azure-AI-tasks/issues).
