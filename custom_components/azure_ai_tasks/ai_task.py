@@ -55,7 +55,7 @@ DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1024
 DEFAULT_MIME_TYPE = "image/png"
 MAX_TOKENS = 1000
-DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TEMPERATURE = 1
 
 # Media Source Prefixes
 MEDIA_SOURCE_CAMERA = "media-source://camera/"
@@ -76,7 +76,7 @@ def _supports_temperature_override(model: str) -> bool:
     # GPT-5 series and o1/o3 reasoning models do not support non-default temperature
     if model_lower.startswith("gpt-5"):
         return False
-    if model_lower.startswith("o1") or model_lower.startswith("o3"):
+    if model_lower.startswith(("o1", "o3", "o4")):
         return False
     return True
 
@@ -139,6 +139,8 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         self._image_model = image_model
         self._hass = hass
         self._config_entry = config_entry
+        # Models (deployments) that rejected a custom temperature at runtime
+        self._no_temperature_models: set[str] = set()
         # Use config entry ID to ensure unique IDs across multiple integrations
         self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}"
         
@@ -523,7 +525,7 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
                 "max_completion_tokens": MAX_TOKENS,
             }
 
-        if _supports_temperature_override(model):
+        if self._supports_temperature(model):
             payload["temperature"] = DEFAULT_TEMPERATURE
 
         # Foundry endpoints require the model name in the request body
@@ -531,6 +533,15 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
             payload["model"] = model
 
         return payload
+
+    def _supports_temperature(self, model: str) -> bool:
+        """Check whether a custom temperature may be sent for this model.
+
+        Deployment names are user-defined, so the name-based check can miss
+        models that only accept the default temperature; those are learned
+        from API errors and remembered here.
+        """
+        return model not in self._no_temperature_models and _supports_temperature_override(model)
 
     async def _async_post_chat_completion(
         self,
@@ -542,7 +553,10 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         model: str,
         error_label: str,
     ) -> dict[str, Any]:
-        """Post a chat completion."""
+        """Post a chat completion.
+
+        If the model rejects the custom temperature, retry once without it.
+        """
         async with session.post(
             url,
             headers=headers,
@@ -551,10 +565,21 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         ) as response:
             if response.status == 200:
                 return await response.json()
-
+            status = response.status
             error_text = await response.text()
-            _LOGGER.error("%s: %s", error_label, error_text)
-            self._handle_api_error(response.status, error_text, model)
+
+        if status == 400 and "temperature" in payload and "temperature" in error_text:
+            _LOGGER.debug(
+                "Model '%s' does not support a custom temperature, retrying with default", model
+            )
+            self._no_temperature_models.add(model)
+            payload = {k: v for k, v in payload.items() if k != "temperature"}
+            return await self._async_post_chat_completion(
+                session, url, headers, payload, api_version, model, error_label
+            )
+
+        _LOGGER.error("%s: %s", error_label, error_text)
+        self._handle_api_error(status, error_text, model)
 
     async def _handle_image_edit(
         self,
@@ -690,10 +715,8 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
             "max_completion_tokens": MAX_TOKENS,
             "model": image_model,
         }
-        if _supports_temperature_override(image_model):
+        if self._supports_temperature(image_model):
             payload["temperature"] = DEFAULT_TEMPERATURE
-        url = self._build_url("chat", image_model)
-        headers = self._get_headers()
 
         result = await self._async_post_chat_completion(
             session,

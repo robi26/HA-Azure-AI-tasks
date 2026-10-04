@@ -17,6 +17,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set version in manifest from release tag
+        run: |
+          jq --arg v "${{ github.event.release.tag_name }}" '.version = ($v | ltrimstr("v"))' \
+            custom_components/azure_ai_tasks/manifest.json > manifest.tmp
+          mv manifest.tmp custom_components/azure_ai_tasks/manifest.json
+
       - name: Create zip file
         run: |
           cd custom_components/azure_ai_tasks
