@@ -64,19 +64,6 @@ MEDIA_SOURCE_IMAGE = "media-source://image/"
 MEDIA_LOCAL_PATH = "/media/local/"
 
 
-def _uses_max_completion_tokens(model: str) -> bool:
-    """Check if the model uses max_completion_tokens parameter instead of max_tokens.
-
-    GPT-5 models (including gpt-5-mini) and newer models require max_completion_tokens.
-    Older models like GPT-4, GPT-3.5 use max_tokens.
-    """
-    if not model:
-        return False
-    model_lower = model.lower()
-    # GPT-5 models use max_completion_tokens
-    return model_lower.startswith("gpt-5")
-
-
 def _supports_temperature_override(model: str) -> bool:
     """Check if the model supports setting a custom temperature value.
 
@@ -92,22 +79,6 @@ def _supports_temperature_override(model: str) -> bool:
     if model_lower.startswith("o1") or model_lower.startswith("o3"):
         return False
     return True
-
-
-def _is_unsupported_max_tokens_error(error_text: str) -> bool:
-    """Check whether an API error specifically rejects the max_tokens parameter."""
-    try:
-        error = json.loads(error_text).get("error", {})
-    except (JSONDecodeError, AttributeError):
-        return False
-
-    if not isinstance(error, dict) or error.get("param") != "max_tokens":
-        return False
-
-    message = error.get("message")
-    return error.get("code") == "unsupported_parameter" or (
-        isinstance(message, str) and "max_completion_tokens" in message
-    )
 
 
 async def async_setup_entry(
@@ -528,8 +499,6 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         For Foundry (/v1/) endpoints the model must be specified in the request body.
         For traditional Azure OpenAI endpoints the model is encoded in the URL path.
         """
-        token_param = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
-
         if attachments:
             message_content: list[dict[str, Any]] = [{"type": "text", "text": user_message}]
             for attachment in attachments:
@@ -546,12 +515,12 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
 
             payload: dict[str, Any] = {
                 "messages": [{"role": "user", "content": message_content}],
-                token_param: MAX_TOKENS,
+                "max_completion_tokens": MAX_TOKENS,
             }
         else:
             payload = {
                 "messages": [{"role": "user", "content": user_message}],
-                token_param: MAX_TOKENS,
+                "max_completion_tokens": MAX_TOKENS,
             }
 
         if _supports_temperature_override(model):
@@ -573,30 +542,19 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         model: str,
         error_label: str,
     ) -> dict[str, Any]:
-        """Post a chat completion, retrying with the supported token parameter if needed."""
-        request_payload = payload
-        for attempt in range(2):
-            async with session.post(
-                url,
-                headers=headers,
-                json=request_payload,
-                params=self._api_params(api_version),
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
+        """Post a chat completion."""
+        async with session.post(
+            url,
+            headers=headers,
+            json=payload,
+            params=self._api_params(api_version),
+        ) as response:
+            if response.status == 200:
+                return await response.json()
 
-                error_text = await response.text()
-                if (
-                    attempt == 0
-                    and "max_tokens" in request_payload
-                    and _is_unsupported_max_tokens_error(error_text)
-                ):
-                    request_payload = dict(request_payload)
-                    request_payload["max_completion_tokens"] = request_payload.pop("max_tokens")
-                    continue
-
-                _LOGGER.error("%s: %s", error_label, error_text)
-                self._handle_api_error(response.status, error_text, model)
+            error_text = await response.text()
+            _LOGGER.error("%s: %s", error_label, error_text)
+            self._handle_api_error(response.status, error_text, model)
 
     async def _handle_image_edit(
         self,
@@ -727,12 +685,9 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
             except Exception as err:
                 _LOGGER.warning("Failed to process attachment: %s", err)
 
-        # Determine which token parameter to use based on the model
-        token_param = "max_completion_tokens" if _uses_max_completion_tokens(image_model) else "max_tokens"
-
         payload: dict[str, Any] = {
             "messages": [{"role": "user", "content": message_content}],
-            token_param: MAX_TOKENS,
+            "max_completion_tokens": MAX_TOKENS,
             "model": image_model,
         }
         if _supports_temperature_override(image_model):
