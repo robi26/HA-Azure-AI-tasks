@@ -94,6 +94,22 @@ def _supports_temperature_override(model: str) -> bool:
     return True
 
 
+def _is_unsupported_max_tokens_error(error_text: str) -> bool:
+    """Check whether an API error specifically rejects the max_tokens parameter."""
+    try:
+        error = json.loads(error_text).get("error", {})
+    except (JSONDecodeError, AttributeError):
+        return False
+
+    if not isinstance(error, dict) or error.get("param") != "max_tokens":
+        return False
+
+    message = error.get("message")
+    return error.get("code") == "unsupported_parameter" or (
+        isinstance(message, str) and "max_completion_tokens" in message
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -547,6 +563,41 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
 
         return payload
 
+    async def _async_post_chat_completion(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        api_version: str,
+        model: str,
+        error_label: str,
+    ) -> dict[str, Any]:
+        """Post a chat completion, retrying with the supported token parameter if needed."""
+        request_payload = payload
+        for attempt in range(2):
+            async with session.post(
+                url,
+                headers=headers,
+                json=request_payload,
+                params=self._api_params(api_version),
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+
+                error_text = await response.text()
+                if (
+                    attempt == 0
+                    and "max_tokens" in request_payload
+                    and _is_unsupported_max_tokens_error(error_text)
+                ):
+                    request_payload = dict(request_payload)
+                    request_payload["max_completion_tokens"] = request_payload.pop("max_tokens")
+                    continue
+
+                _LOGGER.error("%s: %s", error_label, error_text)
+                self._handle_api_error(response.status, error_text, model)
+
     async def _handle_image_edit(
         self,
         session: aiohttp.ClientSession,
@@ -689,21 +740,18 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         url = self._build_url("chat", image_model)
         headers = self._get_headers()
 
-        async with session.post(
-            url,
-            headers=headers,
-            json=payload,
-            params=self._api_params(API_VERSION_IMAGE_LATEST),
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                _LOGGER.error("Azure AI vision model error: %s", error_text)
-                self._handle_api_error(response.status, error_text, image_model)
-            
-            result = await response.json()
-            return await self._process_image_generation_result(
-                result, user_message, image_model, chat_log, DEFAULT_WIDTH, DEFAULT_HEIGHT, session
-            )
+        result = await self._async_post_chat_completion(
+            session,
+            self._build_url("chat", image_model),
+            self._get_headers(),
+            payload,
+            API_VERSION_IMAGE_LATEST,
+            image_model,
+            "Azure AI vision model error",
+        )
+        return await self._process_image_generation_result(
+            result, user_message, image_model, chat_log, DEFAULT_WIDTH, DEFAULT_HEIGHT, session
+        )
 
     async def _handle_standard_image_generation(
         self,
@@ -832,36 +880,33 @@ class AzureAITaskEntity(ai_task.AITaskEntity):
         headers = self._get_headers()
 
         try:
-            async with session.post(
+            result = await self._async_post_chat_completion(
+                session,
                 self._build_url("chat", model_to_use),
-                headers=headers,
-                json=payload,
-                params=self._api_params(API_VERSION_CHAT),
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    _LOGGER.error("Azure AI API error: %s", error_text)
-                    self._handle_api_error(response.status, error_text, model_to_use)
-                    
-                result = await response.json()
-                if "choices" in result and len(result["choices"]) > 0:
-                    text = result["choices"][0]["message"]["content"].strip()
-                    
-                    # If the task requires structured data, parse as JSON
-                    if task.structure:
-                        data = self._parse_structured_response(text)
-                        return ai_task.GenDataTaskResult(
-                            conversation_id=chat_log.conversation_id,
-                            data=data,
-                        )
-                    else:
-                        return ai_task.GenDataTaskResult(
-                            conversation_id=chat_log.conversation_id,
-                            data=text,
-                        )
+                headers,
+                payload,
+                API_VERSION_CHAT,
+                model_to_use,
+                "Azure AI API error",
+            )
+            if "choices" in result and len(result["choices"]) > 0:
+                text = result["choices"][0]["message"]["content"].strip()
+
+                # If the task requires structured data, parse as JSON
+                if task.structure:
+                    data = self._parse_structured_response(text)
+                    return ai_task.GenDataTaskResult(
+                        conversation_id=chat_log.conversation_id,
+                        data=data,
+                    )
                 else:
-                    _LOGGER.error("Unexpected response format from Azure AI: %s", result)
-                    raise HomeAssistantError("Unexpected response format from Azure AI")
+                    return ai_task.GenDataTaskResult(
+                        conversation_id=chat_log.conversation_id,
+                        data=text,
+                    )
+            else:
+                _LOGGER.error("Unexpected response format from Azure AI: %s", result)
+                raise HomeAssistantError("Unexpected response format from Azure AI")
                     
         except aiohttp.ClientError as err:
             _LOGGER.error("Error communicating with Azure AI: %s", err)
